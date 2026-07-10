@@ -216,3 +216,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Source data — download from Zenodo (see README)
+Datasets/LC_loans.csv
+
+# Regenerated train/test splits (created by running Code/credit_scorecard.ipynb)
+Datasets/X_train.csv
+Datasets/X_train_woes.csv
+Datasets/X_test.csv
+Datasets/X_test_woes.csv
+Datasets/y_train.csv
+Datasets/y_train_woes.csv
+Datasets/y_test.csv
+Datasets/y_test_woes.csv
+
+# Duplicate of the scorecard workbook (canonical copy lives in Scorecard/)
+Datasets/credit_scorecard_unpenalised.xlsx
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+.DS_Store
