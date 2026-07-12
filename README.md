@@ -129,7 +129,7 @@ Requires Python 3.9+ and the packages in `requirements.txt` (scikit-learn 1.2+ i
 `penalty=None` option).
 
 ```bash
-git clone <your-repo-url>
+git clone <https://github.com/curingd/credit-scorecard-model>
 cd <repo>
 pip install -r requirements.txt
 # place LC_loans.csv in Datasets/ (see Data above)
