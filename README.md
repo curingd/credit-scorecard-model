@@ -1,158 +1,89 @@
 # Credit Scorecard Model
 
-An end-to-end credit scorecard built from the Lending Club US retail-loan dataset, using
-weight-of-evidence variable selection and logistic regression in Python, and delivered as an
-interactive Excel scorecard. The project covers the full workflow a credit risk analyst would
-follow: data preparation, variable selection, model fitting and validation, and conversion of the
-fitted model into a points-based scorecard that a non-technical user can operate.
+A retail credit scorecard built in Python from ~1.35 million Lending Club US consumer loans, enriched with vintaged macroeconomic data, and validated with a full out-of-time (OOT) holdout: score-level Population Stability Index (PSI), characteristic-level distribution analysis, and OOT discrimination testing of the frozen model. Model output is converted into an interactive Excel scorecard with configurable base score and points-to-double-odds (PDO) settings.
 
-## Overview
+## Headline results
 
-The goal is to predict the probability that a borrower defaults, using only information available at
-the point of loan application, and to express that prediction as a transparent scorecard.
+| Metric | Unpenalised LR (in-time test) | Ridge, C = 0.0001 (in-time test) | Unpenalised LR (OOT holdout) |
+| --- | --- | --- | --- |
+| AUC | 0.67 | 0.66 | 0.61 |
+| Gini | 0.34 | 0.32 | 0.23 |
+| Accuracy | 0.60 | 0.59 | 0.67 |
+| Recall | 0.64 | 0.65 | 0.44 |
+| Precision | 0.27 | 0.27 | 0.31 |
+| F1 | 0.38 | 0.38 | 0.36 |
 
-The pipeline:
+**PSI (train → OOT, 10 score-decile bins): 0.82** — far above the conventional 0.25 "significant shift" threshold.
 
-1. **Data preparation** — an 80/20 train/test split (`random_state=42`) of the Lending Club dataset.
-2. **Variable selection** — weight-of-evidence (WoE) and information value (IV) are used to rank
-   predictors. IV is computed for the continuous variables across a range of bin counts to find
-   where it plateaus, and once for each categorical variable.
-3. **WoE encoding** — every predictor value is replaced by the WoE of its bin or category. Bin
-   boundaries and WoE values are learned on the training set and applied to the test set to avoid
-   leakage.
-4. **Modelling** — two logistic regression models are fitted with class balancing: an unpenalised
-   model and a heavily penalised ridge model (`C = 0.0001`). The Kolmogorov–Smirnov statistic is
-   used to choose the classification threshold.
-5. **Validation** — ROC/AUC, confusion matrices, and precision, accuracy, recall and F1 scores on
-   the held-out test set, plus variance inflation factors (VIF) to check for multicollinearity.
-6. **Scorecard conversion** — the unpenalised model's coefficients and bin WoEs are turned into
-   per-bin points and assembled into an interactive Excel workbook.
+The three OOT results tell one coherent story of population drift degrading the model:
 
-WoE and IV are defined as:
+- The score distribution shifted markedly toward **lower** predicted default probabilities (PSI 0.82);
+- yet the **realised** default rate in the OOT vintage was slightly **higher** (21.8% vs 19.6% in training);
+- and rank-ordering power fell (AUC 0.67 → 0.61).
 
-```
-WoE = ln(%good / %bad)     per bin
-IV  = Σ (%good − %bad) × WoE   summed over bins
-```
+In other words, the model reads the recent vintage as safer while it actually defaults more often — precisely the failure mode that PSI monitoring and periodic outcome analysis exist to catch, and the trigger for redevelopment in a production setting. The headline in-time AUC reflects the deliberate constraint of the dataset: application-time variables only, with no credit bureau or behavioural data, which structurally caps discrimination.
+
+Point-metric comparisons across the two columns should be read with care: the classification threshold is re-estimated by the K–S statistic on each sample, and the class mix differs, so the OOT accuracy uptick reflects a different precision/recall trade rather than improved performance — the threshold-free AUC/Gini row is the clean comparison.
+
+## Validation design
+
+The split architecture separates two distinct failure modes:
+
+1. **Time cut first** — loans are sorted by issue date and the most recent 20% (~270k loans) are set aside as an OOT holdout before any model development.
+2. **Random 80/20 split** within the remaining development window (~863k train / ~216k test) measures overfitting.
+3. **Model frozen**, then scored on the OOT holdout.
+4. **Stability testing:** PSI computed on score deciles (quantile bins from training-set predicted probabilities), with characteristic-level distribution comparisons for each model variable.
+5. **OOT discrimination testing:** ROC/AUC, confusion matrix, and classification metrics for the frozen model on the holdout.
+
+The random in-time split and the OOT holdout are complements, not substitutes: the former tests generalisation to unseen borrowers from the same population, the latter tests stability as the population itself shifts. Issue date is used only as the cutpoint and is not a model variable — in an OOT framework it cannot be, since it would act as a proxy for the business-cycle position of the training window.
+
+## Data
+
+- **Loans:** [Lending Club loan dataset for granting models](https://doi.org/10.5281/zenodo.11295916) (Ariza-Garzón, Sanz-Guerrero & Arroyo Gallardo, 2024) — 1,347,681 loans, filtered to completed or defaulted loans only, so the OOT holdout is not contaminated by unresolved outcomes.
+- **Unemployment rate:** ALFRED vintaged UNRATE series, lagged one month to respect the BLS publication schedule — the model only sees the figure that was actually available at loan origination.
+- **Credit spread:** Moody's Baa corporate bond spread over 10-year Treasuries (FRED, BAA10Y), monthly averaged. Tested and **dropped at variable selection** (IV < 0.02).
+
+Unfortunately, many of the datasets are too large to store in this project: only `alfred_moodys_baa_10y_spread.csv` and `alfred_unrate.csv` are currently present in the `Datasets` folder, but these two files are sufficient to generate the intermediate datasets using the files in the `Code` folder once the LC loans dataset is downloaded from the link above.
+
+## Methodology
+
+- **Variable selection** by information value from weight-of-evidence (WoE) scores. Continuous variables were binned at a range of quantile-bin counts and discrete variables tested at a range of minimum category sizes to choose stable binning parameters (10 bins; minimum category size 20, with rare categories merged to "Other"). Variables with IV < 0.02 dropped: `credit_spread`, `emp_length`, `experience_c`, `addr_state`.
+- **WoE transformation** of all retained variables, with bin boundaries and category–WoE maps derived from the training set only and applied unchanged to the test and OOT sets. Categories unseen in training are mapped to "Other".
+- **Multicollinearity check** via variance inflation factors (max implied R² = 0.43).
+- **Models:** unpenalised logistic regression with balanced class weights, benchmarked against a heavily penalised ridge specification (C = 0.0001) to confirm that reducing effective model complexity does not improve out-of-sample performance.
+- **Classification threshold** chosen by the Kolmogorov–Smirnov statistic (maximising TPR − FPR), prioritising recall over precision — in a scorecard context, a missed default is more costly than a false alarm.
+- **Scorecard conversion:** coefficients × WoE mapped to points in an interactive Excel workbook with user-selectable base score, base odds, and PDO, plus dropdowns for categorical characteristics.
 
 ## Repository structure
 
 ```
-.
-├── Code/
-│   ├── credit_scorecard.ipynb        # Notebook (primary, run top to bottom)
-│   └── credit_scorecard.py           # Script export of the same pipeline
-├── Datasets/
-│   ├── LC_loans.csv                  # Source data — download from Zenodo (see Data)
-│   ├── X_train.csv / X_test.csv      # Raw feature splits (regenerated by the notebook)
-│   ├── X_train_woes.csv / ...        # WoE-encoded splits (regenerated by the notebook)
-│   ├── y_train.csv / y_test.csv      # Targets (regenerated by the notebook)
-│   ├── scorecard_bin_labels.csv      # Bin edges / categories feeding the Excel scorecard
-│   └── scorecard_bin_scores.csv      # Per-bin points feeding the Excel scorecard
-├── Scorecard/
-│   └── credit_scorecard_unpenalised.xlsx   # Interactive points-based scorecard
-├── Images/                           # Figures produced by the pipeline
-├── Analysis/
-│   ├── credit_scorecard_analysis.pdf # Full written analysis and discussion
-│   └── credit_scorecard_analysis.docx
-├── requirements.txt
-└── README.md
+├── Analysis/     Full write-up (docx + pdf): methodology, results, OOT and PSI investigation
+├── Code/         data_processing, credit_scorecard, X_test_psi_analysis (.py + .ipynb)
+├── Datasets/     Source and derived CSVs (loans + ALFRED/FRED macro series)
+├── Images/       Charts: IV selection, ROC curves (in-time and OOT), confusion matrices, PSI distributions
+└── Scorecard/    Interactive Excel scorecard + bin labels/scores CSVs
 ```
 
-## Method in more detail
+## Reproducing the results
 
-**Variables.** The model uses application-time fields only: issue date, income (`revenue`),
-debt-to-income (`dti_n`), loan amount, FICO score, loan purpose, home ownership, employment length,
-prior-borrower flag (`experience_c`) and state. The free-text `title` field was dropped after its IV
-came out very low; `id`, `zip_code` and `desc` were excluded up front as non-predictive, too granular
-or too sparse.
+Requires Python 3 with `pandas`, `numpy`, `scikit-learn`, `statsmodels`, `seaborn`, and `matplotlib`.
 
-![Information values for continuous variables across bin counts](Images/continuous_variable_IVs.png)
+1. `Code/data_processing.py` — merges the loan data with the lagged ALFRED unemployment series and monthly-averaged FRED credit spread.
+2. `Code/credit_scorecard.py` — performs the OOT/random split, WoE/IV variable selection, model fitting and validation, scorecard export, score-level PSI analysis, and OOT discrimination testing.
+3. `Code/X_test_psi_analysis.py` — characteristic-level distribution comparisons between the training set and OOT holdout.
 
-Fourteen equal-percentile bins were chosen for the continuous variables — the largest number that
-keeps every FICO bin populated (avoiding infinite WoE), beyond which IV gains are marginal.
+Each script is also provided as a Jupyter notebook with outputs preserved.
 
-**Class imbalance.** Defaults are the minority class, so both models are fitted with
-`class_weight='balanced'`. The KS-optimal threshold maximises the gap between the true-positive and
-false-positive rates, which favours recall — appropriate here, since failing to flag a defaulter is
-more costly than a false alarm.
+## Key findings
 
-**Ridge model.** A heavily penalised ridge model was fitted to test whether reducing effective model
-complexity improves out-of-sample performance. It does not: scores fall slightly and no variable is
-driven out, indicating that all retained variables carry predictive weight.
-
-## Results
-
-Evaluated on the held-out test set at the KS-optimal threshold, both models with class balancing:
-
-| Model                   | AUC  | Precision | Recall | Accuracy | F1   |
-|-------------------------|------|-----------|--------|----------|------|
-| Unpenalised logistic    | 0.67 | 0.29      | 0.62   | 0.62     | 0.39 |
-| Ridge logistic (C=1e-4) | 0.66 | 0.29      | 0.61   | 0.62     | 0.39 |
-
-![ROC curve, unpenalised model](Images/ROC_curve_unpenalised.png)
-
-Accuracy and recall beat chance, while precision is low — the recall-oriented threshold accepts more
-false positives by design. Removing the class overweighting nudges precision up and recall down, with
-little net change in F1. VIFs are all close to 1, so multicollinearity is not a concern. See
-`Analysis/credit_scorecard_analysis.pdf` for the full discussion.
-
-## The interactive scorecard
-
-`Scorecard/credit_scorecard_unpenalised.xlsx` converts the unpenalised model into a points-based
-scorecard. The user can set a base score and the points-to-double-the-odds (20 is a common choice),
-choose categorical values from dropdowns, and enter continuous values within the training range. The
-total score updates live, and conditional formatting highlights which inputs push default risk up or
-down.
-
-![Scorecard screenshot](Images/credit_scorecard_screenshot.png)
-
-## Data
-
-The dataset is the **Lending Club loan dataset for granting models** (Ariza-Garzón, Sanz-Guerrero and
-Arroyo Gallardo, 2024), a cleaned granting-model version of the public Lending Club loans, available
-from Zenodo: https://doi.org/10.5281/zenodo.11295916 (CC BY 4.0).
-
-Two files exceed GitHub's 100 MB per-file limit and so are **not committed** to the repository:
-`Datasets/LC_loans.csv` (~167 MB) and `Datasets/X_train_woes.csv` (~199 MB). The other split files are
-also large. All of them are reproducible, so the recommended setup is:
-
-1. Download `LC_loans.csv` from the Zenodo record above and place it in `Datasets/`.
-2. Run the notebook — it regenerates the `X_*` / `y_*` split files as a checkpoint.
-
-A `.gitignore` is included that excludes the source file and the regenerated splits. If you would
-rather version the large files directly, use [Git LFS](https://git-lfs.com/) instead.
-
-## Getting started
-
-Requires Python 3.9+ and the packages in `requirements.txt` (scikit-learn 1.2+ is needed for the
-`penalty=None` option).
-
-```bash
-git clone <https://github.com/curingd/credit-scorecard-model>
-cd <repo>
-pip install -r requirements.txt
-# place LC_loans.csv in Datasets/ (see Data above)
-jupyter lab Code/credit_scorecard.ipynb   # run top to bottom
-```
-
-Running the notebook end to end regenerates the data splits, fits both models, writes the figures in
-`Images/`, and produces the scorecard bin CSVs that feed the Excel workbook. The train/test split is
-seeded (`random_state=42`) for reproducibility.
+- **Population drift degrades the model, and the monitoring framework catches it.** The recent vintage scores materially lower for default risk (PSI 0.82) while defaulting slightly more often, and discrimination weakens (AUC 0.67 → 0.61). Characteristic-level analysis attributes the score shift to upward drift in income and FICO distributions, the treatment of unseen `title` categories (mapped to "Other", which carries a negative score contribution), partially offset by a falling unemployment rate. In production this combination — score distribution and outcomes moving in opposite directions — would trigger model redevelopment.
+- **The unemployment coefficient is negative** — counterintuitive at first sight. The plausible mechanism is timing: unemployment is measured at origination, and loans originated near a cyclical unemployment peak are repaid into an improving economy (and vice versa).
+- **Ridge penalisation degrades performance across the board** without zeroing out variables, indicating all retained characteristics carry genuine predictive signal at this specification.
 
 ## References
 
-Ariza-Garzón, M.J., Sanz-Guerrero, M. and Arroyo Gallardo, J. (2024) *Lending Club loan dataset for
-granting models* (Version 0.1) [Dataset]. Universidad Complutense de Madrid. Available at:
-https://doi.org/10.5281/zenodo.11295916 (Accessed: 10 July 2026).
+Full Harvard-style references are in `Analysis/credit_scorecard_analysis.pdf`, including Siddiqi (2006) *Credit Risk Scorecards*, the Zenodo dataset citation, and the ALFRED/FRED data sources.
 
-Howgate, K. (2021) *How to build a credit scorecard*. STOR-i, Lancaster University. Available at:
-https://www.lancaster.ac.uk/stor-i-student-sites/katie-howgate/2021/02/07/how-to-build-a-credit-scorecard/
-(Accessed: 10 July 2026).
+---
 
-Siddiqi, N. (2006) *Credit Risk Scorecards: Developing and Implementing Intelligent Credit Scoring*.
-Hoboken, NJ: John Wiley & Sons.
-
-## Author
-
-David Curington
+© David Curington 2026
